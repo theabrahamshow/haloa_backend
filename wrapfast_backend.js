@@ -22,7 +22,7 @@ const AUTH_SECRET_KEY = process.env.AUTH_SECRET_KEY
 const HMAC_SECRET_KEY = process.env.HMAC_SECRET_KEY
 const AUTH_LIMIT = process.env.AUTH_LIMIT
 const PROMPT_LIMIT = process.env.PROMPT_LIMIT
-const VISION_MAX_TOKENS = process.env.VISION_MAX_TOKENS
+const VISION_MAX_TOKENS = parseInt(process.env.VISION_MAX_TOKENS, 10)
 const telegramBotKey = process.env.TELEGRAM_BOT_KEY
 const channelId = process.env.TELEGRAM_CHANNEL_ID
 
@@ -101,6 +101,7 @@ app.post('/vision', async (req, res) => {
     }
 
     const payload = {
+      // You can use the new 'gpt-4o' here
       model: 'gpt-4-vision-preview',
       messages: [
         {
