@@ -13,20 +13,23 @@ const port = 10000
 
 const chatUrl = 'https://api.openai.com/v1/chat/completions'
 const dalleUrl = 'https://api.openai.com/v1/images/generations'
+const anthropicMessagesUrl = 'https://api.anthropic.com/v1/messages'
 const rateLimitErrorCode = 'rate_limit_exceeded'
 const wrapFastAppIdentifier = 'wrapfast'
 
 // Environment variables
 const apiKey = process.env.API_KEY
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const AUTH_SECRET_KEY = process.env.AUTH_SECRET_KEY
 const HMAC_SECRET_KEY = process.env.HMAC_SECRET_KEY
 const AUTH_LIMIT = process.env.AUTH_LIMIT
 const PROMPT_LIMIT = process.env.PROMPT_LIMIT
 const VISION_MAX_TOKENS = parseInt(process.env.VISION_MAX_TOKENS, 10)
+const ANTHROPIC_MAX_TOKENS = parseInt(process.env.ANTHROPIC_MAX_TOKENS, 10)
 const telegramBotKey = process.env.TELEGRAM_BOT_KEY
 const channelId = process.env.TELEGRAM_CHANNEL_ID
 
-if (!apiKey) {
+if (!apiKey || !ANTHROPIC_API_KEY) {
   console.error('API key not found')
   process.exit(1)
 }
@@ -52,6 +55,10 @@ const authtLimiter = rateLimit({
 app.use('/vision', promptLimiter)
 app.use('/chatgpt', promptLimiter)
 app.use('/dalle', promptLimiter)
+
+// POST endpoints to send requests to Anthropic APIs
+app.use('/anthropic-messages', promptLimiter)
+
 // GET endpoint to send de hmac secret key
 app.use('/auth', authtLimiter)
 
@@ -470,6 +477,100 @@ async function postDalleApi (payload) {
     })
   })
 }
+
+// ANTHROPIC CLAUDE
+// Anthropic use the same endpoint both messages or vision
+// This endpoint expects:
+// If it receives a JSON with an image property
+// {image: String}
+// it will use Vision capabilities.
+// If it receives a JSON with a prompt property
+// {prompt: String}
+// it will use messages capabilities.
+// You can change it or add more properties to handle your special cases.
+
+app.post('/anthropic-messages', async (req, res) => {
+  try {
+    let messages
+    // Change here for whatever Anthropic's model you wan to use
+    const model = 'claude-3-5-sonnet-20240620'
+
+    if (req.body.prompt) {
+      // CHAT
+      console.log(`\n💬 Requesting ANTHROPIC MESSAGE prompt: ${req.body.prompt}`)
+      messages = [{ role: 'user', content: req.body.prompt }]
+    } else if (req.body.image && req.body.language) {
+      // VISION
+      const prompt = buildWrapFastPrompt(req.body)
+      console.log(`\n📸 Requesting image analysis to ANTHROPIC with prompt: ${prompt}`)
+      messages = [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/jpeg',
+                data: req.body.image
+              }
+            }
+          ]
+        }
+      ]
+    } else {
+      return res.status(400).json({ error: 'Invalid request body' })
+    }
+
+    const options = {
+      url: anthropicMessagesUrl,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      json: {
+        model,
+        max_tokens: ANTHROPIC_MAX_TOKENS,
+        messages
+      }
+    }
+
+    request(options, (error, response, body) => {
+      if (error) {
+        console.error('Error calling Anthropic API:', error)
+        return res.status(500).json({ error: 'An error occurred while processing your request' })
+      }
+
+      if (response.statusCode !== 200) {
+        console.error('Anthropic API returned non-200 status:', body)
+        return res.status(response.statusCode).json({ error: 'Error from Anthropic API' })
+      }
+
+      const claudeResponse = body.content[0].text
+
+      if (req.body.prompt) {
+        console.log(claudeResponse)
+        res.json({ message: claudeResponse })
+      } else {
+        try {
+          const jsonResponse = JSON.parse(claudeResponse)
+          console.log(jsonResponse)
+          res.json(jsonResponse)
+        } catch (e) {
+          console.log(body)
+          console.error('Error parsing JSON:', e)
+          res.status(500).json({ error: 'An error occurred while parsing Anthropic response' })
+        }
+      }
+    })
+  } catch (error) {
+    console.error('Error calling Anthropic API:', error.response?.data || error.message)
+    res.status(500).json({ error: 'An error occurred while processing your request' })
+  }
+})
 
 // Send from the app a JSON with the properties you need. In this example we send:
 // {image: String,
