@@ -1,14 +1,14 @@
 {
-  "name": "instacaption-backend",
+  "name": "wrapfast-backend",
   "version": "1.0.0",
-  "description": "Backend for InstaCaption",
-  "main": "instacaption_vision_ws.js",
+  "description": "Backend for WrapFast", 
+  "main": "wrapfast_backend.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/juanjovn/instacaption-backend.git"
+    "url": "git+https://github.com/juanjovn/wrapfast-backend.git"
   },
   "keywords": [
     "vision"
@@ -16,9 +16,9 @@
   "author": "juanjovn",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/juanjovn/instacaption-backend/issues"
+    "url": "https://github.com/juanjovn/wrapfast-backend/issues"
   },
-  "homepage": "https://github.com/juanjovn/instacaption-backend#readme",
+  "homepage": "https://github.com/juanjovn/wrapfast-backend#readme",
   "dependencies": {
     "dotenv": "^16.3.1",
     "express": "^4.18.2",

@@ -109,7 +109,7 @@ app.post('/vision', async (req, res) => {
 
     const payload = {
       // You can use the new 'gpt-4o' here
-      model: 'gpt-4-vision-preview',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
