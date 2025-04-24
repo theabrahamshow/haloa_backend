@@ -2,6 +2,7 @@ const express = require('express')
 const rateLimit = require('express-rate-limit')
 const crypto = require('crypto')
 const request = require('request')
+const OpenAI = require('openai')
 require('path')
 require('assert')
 const https = require('https')
@@ -16,6 +17,9 @@ const dalleUrl = 'https://api.openai.com/v1/images/generations'
 const anthropicMessagesUrl = 'https://api.anthropic.com/v1/messages'
 const rateLimitErrorCode = 'rate_limit_exceeded'
 const wrapFastAppIdentifier = 'wrapfast'
+
+// Initialize OpenAI client
+const openai = new OpenAI({ apiKey: process.env.API_KEY })
 
 // Environment variables
 const apiKey = process.env.API_KEY
@@ -55,7 +59,8 @@ const authtLimiter = rateLimit({
 app.use('/vision', promptLimiter)
 app.use('/chatgpt', promptLimiter)
 app.use('/dalle', promptLimiter)
-
+app.use('/gpt-image', promptLimiter)
+app.use('/gpt-image-edits', promptLimiter)
 // POST endpoints to send requests to Anthropic APIs
 app.use('/anthropic-messages', promptLimiter)
 
@@ -239,6 +244,130 @@ app.post('/dalle', async (req, res) => {
       }
 
       res.status(500).json({ error: 'Error', details: error.message })
+    }
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'Request to OpenAI failed', details: error.message })
+  }
+})
+
+// New GPT Image Generation Endpoint
+// It expects a JSON with a prompt property
+// {prompt: String}
+// You can change it or add more properties to handle your special cases.
+// Check OpenAI documentation:
+// https://platform.openai.com/docs/guides/image-generation?image-generation-model=gpt-image-1
+app.post('/gpt-image', async (req, res) => {
+  try {
+    const imagePrompt = req.body.prompt
+
+    const payload = {
+      model: 'gpt-image-1',
+      prompt: imagePrompt,
+      size: 'auto', // 1024x1024 (square) 1536x1024 (portrait) 1024x1536 (landscape) auto (default)
+      quality: 'medium' // low, medium, high, auto
+    }
+
+    try {
+      console.log(`\n🏞️ Requesting image generation to GPT Image with prompt: ${imagePrompt}`)
+
+      const imageBase64 = await postGptImageApi(payload)
+      if (imageBase64.error) {
+        return res.status(500).json({ error: imageBase64.error })
+      }
+
+      res.json(imageBase64)
+    } catch (error) {
+      if (error === rateLimitErrorCode) {
+        res.status(400).json({ error: 'Error response from OpenAI API', details: `Error message: ${error.message} with code: ${error.code}` })
+      }
+
+      res.status(500).json({ error: 'Error', details: error.message })
+    }
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'Request to OpenAI failed', details: error.message })
+  }
+})
+
+// GPT Image Edits Endpoint
+// It expects a JSON with the following properties:
+// {
+//   image: String or Array (base64 encoded image(s) to edit, must be PNG, WEBP, or JPG < 25MB),
+//   mask: String (optional base64 encoded mask image),
+//   prompt: String (text description of the desired edits, max 32000 chars),
+//   size: String (optional, '1024x1024', '1536x1024', '1024x1536', or 'auto'),
+//   quality: String (optional, 'high', 'medium', 'low', or 'auto')
+// }
+// Check OpenAI documentation: https://platform.openai.com/docs/guides/image-generation?image-generation-model=gpt-image-1&lang=javascript
+app.post('/gpt-image-edits', async (req, res) => {
+  try {
+    const { image, mask, prompt, size, quality } = req.body
+
+    if (!image) {
+      return res.status(400).json({ error: 'Missing "image" in request body' })
+    }
+
+    if (!prompt) {
+      return res.status(400).json({ error: 'Missing "prompt" in request body' })
+    }
+
+    // GPT-image-1 specific validations
+    if (prompt.length > 32000) {
+      return res.status(400).json({ error: 'Prompt length must be less than 32000 characters' })
+    }
+    if (size && !['1024x1024', '1536x1024', '1024x1536', 'auto'].includes(size)) {
+      return res.status(400).json({ error: 'Invalid size. Must be one of: 1024x1024, 1536x1024, 1024x1536, auto' })
+    }
+    if (quality && !['high', 'medium', 'low', 'auto'].includes(quality)) {
+      return res.status(400).json({ error: 'Invalid quality. Must be one of: high, medium, low, auto' })
+    }
+
+    try {
+      console.log(`\n✏️ Requesting image edit with prompt: ${prompt}`)
+
+      // Convert base64 images to File objects
+      const imageBuffer = Buffer.from(image, 'base64')
+      const imageFile = await OpenAI.toFile(imageBuffer, 'image.png', { type: 'image/png' })
+
+      let maskFile = null
+      if (mask) {
+        const maskBuffer = Buffer.from(mask, 'base64')
+        maskFile = await OpenAI.toFile(maskBuffer, 'mask.png', { type: 'image/png' })
+      }
+
+      // Prepare the request payload
+      const payload = {
+        model: 'gpt-image-1',
+        image: imageFile,
+        prompt
+      }
+
+      // Add optional parameters if provided
+      if (maskFile) {
+        payload.mask = maskFile
+      }
+      if (size) {
+        payload.size = size
+      }
+      if (quality) {
+        payload.quality = quality
+      }
+
+      // Make the API call using the OpenAI client
+      const response = await openai.images.edit(payload)
+
+      const imageResponse = {
+        imageBase64: response.data[0].b64_json
+      }
+
+      res.json(imageResponse)
+    } catch (error) {
+      if (error.code === rateLimitErrorCode) {
+        res.status(400).json({ error: 'Error response from OpenAI API', details: `Error message: ${error.message} with code: ${error.code}` })
+      } else {
+        res.status(500).json({ error: 'Error', details: error.message })
+      }
     }
   } catch (error) {
     console.error(error)
@@ -469,6 +598,50 @@ async function postDalleApi (payload) {
           }
           console.log(dalleResponse)
           resolve(dalleResponse)
+        } catch (e) {
+          console.log(body)
+          reject(e)
+        }
+      }
+    })
+  })
+}
+
+async function postGptImageApi (payload) {
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${apiKey}`
+  }
+
+  return new Promise((resolve, reject) => {
+    request.post({
+      url: dalleUrl,
+      headers,
+      json: payload
+    }, (error, response, body) => {
+      if (error) {
+        console.error('Error:', error)
+        return reject(error)
+      } else {
+        try {
+          if (body.error) {
+            console.log('Error response from OpenAI API: ', body.error.message)
+            const errorCode = body.error.code
+            console.log('With code: ', errorCode)
+
+            return reject(new Error(errorCode))
+          }
+        } catch (error) {
+          console.error('Error accessing properties of error object from OpenAI API: ', error)
+          return reject(error)
+        }
+
+        try {
+          const imageResponse = {
+            imageBase64: body.data[0].b64_json
+          }
+          console.log(imageResponse)
+          resolve(imageResponse)
         } catch (e) {
           console.log(body)
           reject(e)

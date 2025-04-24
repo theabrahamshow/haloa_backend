@@ -1,7 +1,7 @@
 {
   "name": "wrapfast-backend",
   "version": "1.0.0",
-  "description": "Backend for WrapFast", 
+  "description": "Backend for WrapFast",
   "main": "wrapfast_backend.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -23,6 +23,7 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "express-rate-limit": "^7.1.4",
+    "openai": "^4.96.0",
     "request": "^2.88.2"
   },
   "devDependencies": {
