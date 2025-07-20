@@ -1,24 +1,31 @@
 {
-  "name": "wrapfast-backend",
+  "name": "haloa_backend",
   "version": "1.0.0",
-  "description": "Backend for WrapFast",
+  "description": "AI-powered skin analysis backend using Anthropic and OpenAI APIs",
   "main": "wrapfast_backend.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node wrapfast_backend.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/juanjovn/wrapfast-backend.git"
+    "url": "git+https://github.com/YOUR_USERNAME/haloa_backend.git"
   },
   "keywords": [
-    "vision"
+    "skin-analysis",
+    "ai",
+    "anthropic",
+    "openai",
+    "colorimetric",
+    "api",
+    "backend"
   ],
-  "author": "juanjovn",
+  "author": "mathewabraham",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/juanjovn/wrapfast-backend/issues"
+    "url": "https://github.com/YOUR_USERNAME/haloa_backend/issues"
   },
-  "homepage": "https://github.com/juanjovn/wrapfast-backend#readme",
+  "homepage": "https://github.com/YOUR_USERNAME/haloa_backend#readme",
   "dependencies": {
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
