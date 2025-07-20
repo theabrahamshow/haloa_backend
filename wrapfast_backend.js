@@ -651,6 +651,50 @@ async function postGptImageApi (payload) {
   })
 }
 
+// RETRY LOGIC FOR ANTHROPIC API OVERLOAD HANDLING
+async function callAnthropicWithRetry(options, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await new Promise((resolve, reject) => {
+        request(options, (error, response, body) => {
+          if (error) {
+            return reject(new Error(`Network error: ${error.message}`));
+          }
+
+          // Handle Anthropic overload errors (529)
+          if (response.statusCode === 529 && body?.error?.type === 'overloaded_error') {
+            return reject(new Error(`ANTHROPIC_OVERLOADED:${body.error.message}`));
+          }
+
+          // Handle other non-200 responses
+          if (response.statusCode !== 200) {
+            return reject(new Error(`API_ERROR:${response.statusCode}:${JSON.stringify(body)}`));
+          }
+
+          resolve({ response, body });
+        });
+      });
+
+      console.log(`✅ Anthropic API call successful on attempt ${attempt}`);
+      return result;
+
+    } catch (error) {
+      console.log(`❌ Anthropic API attempt ${attempt}/${maxRetries} failed: ${error.message}`);
+
+      // If this is an overload error and we have retries left, wait and retry
+      if (error.message.includes('ANTHROPIC_OVERLOADED') && attempt < maxRetries) {
+        const delay = Math.pow(2, attempt) * 1000; // Exponential backoff: 2s, 4s, 8s
+        console.log(`⏳ Waiting ${delay}ms before retry attempt ${attempt + 1}...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+
+      // If we've exhausted retries or it's a different error, throw
+      throw error;
+    }
+  }
+}
+
 // ANTHROPIC CLAUDE
 // Anthropic use the same endpoint both messages or vision
 // This endpoint expects:
@@ -711,22 +755,60 @@ app.post('/anthropic-messages', async (req, res) => {
       }
     }
 
-    request(options, (error, response, body) => {
-      if (error) {
-        console.error('Error calling Anthropic API:', error)
-        return res.status(500).json({ error: 'An error occurred while processing your request' })
-      }
-
-      if (response.statusCode !== 200) {
-        console.error('Anthropic API returned non-200 status:', body)
-        return res.status(response.statusCode).json({ error: 'Error from Anthropic API' })
-      }
-
+    try {
+      // Call Anthropic with retry logic
+      const { response, body } = await callAnthropicWithRetry(options, 3);
       const claudeResponse = body.content[0].text
 
       if (req.body.prompt) {
         console.log(claudeResponse)
         res.json({ message: claudeResponse })
+      } else if (req.body.image && req.body.language && req.body.language.includes('Fitzpatrick')) {
+        // SKIN ANALYSIS - Return format compatible with iOS app
+        try {
+          // Extract JSON from potentially verbose Anthropic response
+          let jsonString = claudeResponse;
+          
+          // Look for JSON object in the response
+          const jsonMatch = claudeResponse.match(/\{[\s\S]*?\}/);
+          if (jsonMatch) {
+            jsonString = jsonMatch[0];
+          }
+          
+          const skinAnalysis = JSON.parse(jsonString)
+          console.log('✅ Anthropic skin analysis successful:', skinAnalysis)
+          
+          // Return in the enhanced format iOS app expects
+          res.json({
+            current_hex: skinAnalysis.current_hex || "#D8BFA5",
+            tanned_hex: skinAnalysis.tanned_hex || "#B19C87",
+            current_shade_number: skinAnalysis.current_shade_number || 3,
+            next_shade_number: skinAnalysis.next_shade_number || 4,
+            tone: skinAnalysis.tone || "medium",
+            undertone: skinAnalysis.undertone || "warm",
+            uv_sensitivity: skinAnalysis.uv_sensitivity || "medium",
+            texture: skinAnalysis.texture || "smooth",
+            success: true
+          })
+        } catch (e) {
+          console.log('❌ Error parsing Anthropic skin analysis:', body)
+          console.error('Error parsing JSON:', e)
+          
+          // Fallback response if parsing fails (still return 200 to iOS)
+          console.log('🔄 Providing fallback skin analysis response')
+          res.json({
+            current_hex: "#D8BFA5",
+            tanned_hex: "#B19C87",
+            current_shade_number: 3,
+            next_shade_number: 4,
+            tone: "medium",
+            undertone: "warm", 
+            uv_sensitivity: "medium",
+            texture: "smooth",
+            success: false,
+            error: "Analysis temporarily unavailable"
+          })
+        }
       } else {
         try {
           const jsonResponse = JSON.parse(claudeResponse)
@@ -738,10 +820,55 @@ app.post('/anthropic-messages', async (req, res) => {
           res.status(500).json({ error: 'An error occurred while parsing Anthropic response' })
         }
       }
-    })
+
+    } catch (retryError) {
+      console.error('❌ All Anthropic retry attempts failed:', retryError.message);
+      
+      // For skin analysis, always provide a fallback response (don't fail the iOS app)
+      if (req.body.image && req.body.language && req.body.language.includes('Fitzpatrick')) {
+        console.log('🔄 Anthropic failed after retries, providing fallback skin analysis')
+        res.json({
+          current_hex: "#D8BFA5",
+          tanned_hex: "#B19C87", 
+          current_shade_number: 3,
+          next_shade_number: 4,
+          tone: "medium",
+          undertone: "warm",
+          uv_sensitivity: "medium", 
+          texture: "smooth",
+          success: false,
+          error: "Service temporarily overloaded, showing default analysis"
+        })
+      } else {
+        // For other requests, return error
+        res.status(503).json({ 
+          error: 'Service temporarily unavailable. Please try again in a few moments.',
+          retry_after: 30 
+        })
+      }
+    }
+
   } catch (error) {
-    console.error('Error calling Anthropic API:', error.response?.data || error.message)
-    res.status(500).json({ error: 'An error occurred while processing your request' })
+    console.error('Error in /anthropic-messages endpoint:', error.message)
+    
+    // Always provide fallback for skin analysis to prevent iOS app crashes
+    if (req.body.image && req.body.language && req.body.language.includes('Fitzpatrick')) {
+      console.log('🔄 Endpoint error, providing fallback skin analysis')
+      res.json({
+        current_hex: "#D8BFA5",
+        tanned_hex: "#B19C87",
+        current_shade_number: 3,
+        next_shade_number: 4,
+        tone: "medium",
+        undertone: "warm",
+        uv_sensitivity: "medium",
+        texture: "smooth", 
+        success: false,
+        error: "Analysis service error"
+      })
+    } else {
+      res.status(500).json({ error: 'An error occurred while processing your request' })
+    }
   }
 })
 
@@ -751,6 +878,41 @@ app.post('/anthropic-messages', async (req, res) => {
 // -Image: to send to the Vision endpoint.
 // -Language: to pass the parameter to the prompt and ask GPT answer in that language, configured in the app.
 function buildWrapFastPrompt (body) {
+  // Check if this is a skin analysis request
+  if (body.language && body.language.includes('Fitzpatrick')) {
+    console.log('🎯 Using unified master prompting strategy for skin analysis.');
+    // Master prompt combining the best elements of all strategies for consistency and reliability.
+    return `You are a precise, automated colorimetric analysis system. Your sole function is to analyze an image of human skin and return data in a specific JSON format.
+
+Instructions:
+1.  Analyze the most prominent, well-lit, and shadow-free area of skin in the image (e.g., forehead, cheeks).
+2.  Ignore any hair, makeup, or deep shadows. Sample multiple pixels to determine an average color.
+3.  Generate two hex color codes: the current skin color and a plausible tanned version that is one shade darker.
+4.  Assign a numerical shade value from 1 (palest) to 10 (deepest). The 'next_shade_number' must be exactly one greater than the 'current_shade_number'.
+5.  Strictly adhere to the allowed values for each category.
+
+Your response MUST be ONLY the raw JSON object, without any surrounding text, explanations, or markdown like \`\`\`json.
+
+Allowed Values:
+- "tone": ["fair", "light", "medium", "olive", "brown", "deep"]
+- "undertone": ["warm", "cool", "neutral"]
+- "uv_sensitivity": ["high", "medium", "low"]
+- "texture": ["smooth", "soft", "normal", "radiant"]
+
+JSON Format Example:
+{
+  "current_hex": "#A8876A",
+  "tanned_hex": "#9B7A5E",
+  "current_shade_number": 5,
+  "next_shade_number": 6,
+  "tone": "brown",
+  "undertone": "warm",
+  "uv_sensitivity": "low",
+  "texture": "radiant"
+}`;
+  }
+  
+  // Default meal analysis for regular requests
   return `Based on the photo of a meal provided, analyze it as if you were a nutritionist and calculate the total calories, calories per 100 grams, carbs, proteins and fats. Name the meal in ${body.language}. Please, always return only a JSON object with the following properties: 'name', 'total_calories_estimation': INT, 'calories_100_grams': INT, 'carbs': INT, 'proteins': INT, 'fats': INT.`
 }
 
@@ -769,6 +931,8 @@ function sendTelegram (message) {
   })
 }
 
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`)
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Server is running on port ${port} and accessible from all network interfaces`)
+  console.log(`Local access: http://127.0.0.1:${port}`)
+  console.log(`Network access: http://10.3.50.211:${port}`)
 })
